@@ -18,19 +18,25 @@ exports.ComponentPanel = Component.specialize(/** @lends ComponentPanel# */ {
 
     enterDocument: {
         value: function () {
+            this.refresh();
+        }
+    },
+
+    tabTitleforKey: {
+        value: function() {
+            return "Components"
+        }
+    },
+
+    refresh: {
+        value: function() {
             var self = this;
             rootComponent().then(function (rootComponent) {
                 self.root = rootComponent;
             }).done();
         }
     },
-    
-    tabTitleforKey: {
-        value: function() {
-            return "Components"
-        }
-    },
-    
+
 
     root: {
         value: null
