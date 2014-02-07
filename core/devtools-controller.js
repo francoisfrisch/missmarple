@@ -1,36 +1,25 @@
 var Promise = require("montage/core/promise").Promise;
+var Connection = require("q-connection");
+var Q = require("q");
 
-var ID = 0
-
-var messagePort
+var pageConnection = Q.defer();
+var devtoolProxy = {};
 
 if(chrome.runtime) {
-    messagePort = chrome.runtime.connect({name: "devtools"});
-    messagePort.postMessage({action: "register"});
-    messagePort.onMessage.addListener(function(message) {
-        console.log("message from background", message);
-        if(message.reponseTo) {
-            var deferred = messages[message.reponseTo];
-            if(deferred) {
-                deferred
-            } else {
-                console.warn("Unknown message from background", message);
-            }
+    //Connect to the background
+    var backgroundPort = chrome.runtime.connect({name: "background-devtools"});
+    // content -> background -> devtools
+    var messageListener = function(message, sender, sendResponse) {
+        console.log("content -> background -> devtools message:", message);
+        if(message.action === "background-ready") {
+            backgroundPort.postMessage({"action": "inspect-montage"});
+            console.log("background <=> devtools - Connected");
+            pageConnection.resolve(Connection(backgroundPort, devtoolProxy));
         }
-
-    });
+    };
+    //keep listenting so that 
+    backgroundPort.onMessage.addListener(messageListener);
 }
 
-exports.devtoolsController = {};
-
-var messages = {};
-
-exports.devtoolsController.postMessage = function (action, data) {
-    var deferred = Promise.defer();
-    var id = "m-" + ID++;
-    messages[id] = deferred;
-    messagePort.postMessage({action: action, data: data, id: id});
-
-
-    return deferred.promise;
-}
+exports.pageConnection = pageConnection.promise;
+exports.devtoolProxy = devtoolProxy;

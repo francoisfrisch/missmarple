@@ -18,7 +18,7 @@ exports.ComponentPanel = Component.specialize(/** @lends ComponentPanel# */ {
 
     enterDocument: {
         value: function () {
-            this.refresh();
+//            this.refresh();
         }
     },
 
@@ -30,10 +30,24 @@ exports.ComponentPanel = Component.specialize(/** @lends ComponentPanel# */ {
 
     refresh: {
         value: function() {
-            var self = this;
-            rootComponent().then(function (rootComponent) {
-                self.root = rootComponent;
-            }).done();
+
+            rootComponent().then(function (component) {
+                component.addRangeAtPathChangeListener.fcall(null,"childComponents", function (plus, minus, index) {
+                    debugger
+                }).done();
+                return Q.thenResolve(component);
+            })
+            .then(function (component) {
+                component.invoke("load");
+            }).done()
+
+
+//            var self = this;
+//            rootComponent.then(function (rootComponent) {
+//                return rootComponent.get("componentTree");
+//            }).then(function (componentTree) {
+//                self.root = componentTree;
+//            }).done();
         }
     },
 

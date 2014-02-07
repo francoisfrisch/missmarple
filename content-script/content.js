@@ -1,414 +1,110 @@
 
+// Negotiate a connection between the content script and the browser page if
+// possible.  Since the content script and page may be executed in any order
+// relative to each other, the hand-shake must be order independent.  To
+// facilitate this, either actor can initiate the handshake.
+//
+// If the content script loads first, it will wait for the browser page to send
+// a "can-show-promises" challenge.  It will then send a "can-watch-promises"
+// response.
+//
+// If the page loads first, the "can-show-promises" challenge will go ignored.
+// The content script will send a "can-watch-promises" challenge.
+//
+// Either way, the page will receive a "can-watch-promises" message indicating
+// that both the content script and browser page are ready to communicate.
+// At that point, the page will send a "promise-channel" message with a message port
+// to establish two way communication.  The content script will serve as a
+// two-way message proxy between the page and the debugger.
+//
+// The content script for the Ember Inspector greatly informed this design,
+// except that I have elected to use this message passing handshake instead of
+// signaling and poling the DOM.
+//
+// https://github.com/tildeio/ember-extension/blob/b70735d72563dc0dc2e3b310e58efa226de68756/extension_dist/content-script.js
 
-window.montageWillLoad = function () {
-require.async("montage/core/promise").get("Promise").then(function (Q) {
-require.async("montage/collections/lru-map").get("LruMap").then(function (LruMap) {
+// XXX there is a chance that this will interfere with an existing message
+// protocol
 
-    var ContentController = function() {};
+// content executed before montage
+// 1. #ignored         <= content-connect
+// 2. montage-ready =>
+// 3.                  <= content-connect
+// 4. montage-connect  =>
 
-    ConnectionController.prototype.componentTree = function (component) {
-        debugger
-        var rootComponent = require("montage/ui/component").__root__;
-        function visit(node, visitor) {
-            var newNode;
-            if (visitor) {
-                newNode = visitor(node);
-            }
-            var children = node.childComponents;
-            if(children != null && children.length) {
-                var i = 0;
-                newNode.childComponents = [];
-                children.forEach(function(childComponent) {
-                    newNode.childComponents[i] = visit(childComponent, visitor);
-                    i++;
-                });
-            }
-            return newNode;
-        }
-        var tree = visit(rootComponent, function (component) {
-                    var newComponent = {};
-                    newComponent.displayName = component.identifier ? component.identifier : component.constructor.name;
-                    return newComponent;
-                });
-        return tree;
-    };
+// montage executed before content
+// 1. montage-ready => #ignored
+// 2.                  <= content-connect
+// 4. montage-connect  =>
 
+window.addEventListener("message", function (event) {
+    var message = event.data;
+    var action = message.action;
 
-    var messagePort
-    messagePort = chrome.runtime.connect({name: "content"});
-    messagePort.postMessage({action: "register"});
+    if (!action)
+        return;
+    if (action === "montage-connect") {
+        //console.log('content: receive "' + type + '"');
+        connect(event.ports[0]);
+    } else if (action === "montage-ready") {
+        //console.log('content: receive "' + type + '"');
+        window.postMessage({"action": "content-connect"}, window.location.origin);
+    }
+});
 
-    var contentController = new ContentController();
-    var background = Connection(messagePort, contentController);
+//console.log('content: send "can-inspect-montage"');
+window.postMessage({"action": "content-connect"}, window.location.origin);
 
+var montagePort;
+var backgroundPort;
 
+//Connect to the background
 
+function connect(port) {
+    montagePort = port;
+    backgroundPort = chrome.runtime.connect({name: "content-background"});
 
-
-var functions = {};
-
-function run(messagePort) {
-
-    messagePort.onMessage.addListener(function(message) {
-        var action = message.action;
-        console.log("message from background action: ", action, message);
-        if( action && typeof functions[action] === "function" ) {
-            functions[action](message, function (data) {
-                var reponse = { data: data, reponseTo: message.id, action: action };
-                messagePort.postMessage(reponse);
-            });
-        }
+    // Montage page -> content -> background
+    montagePort.addEventListener("message", function (event) {
+        console.log("=> Forward message to background. ", event.data);
+        backgroundPort.postMessage(event.data);
     });
-};
+    // background -> content -> Montage page
+    backgroundPort.onMessage.addListener( function(message, sender, sendResponse) {
+        console.log("<= Forward message to Montage. ", message);
+        montagePort.postMessage(message);
+    });
 
-functions.componentTree = function componentTree(message, callback) {
+    montagePort.start();
+    console.log("montage <=> content - Connected");
 }
 
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-var Connection;
-(function(Connection) {
-
-// HACK from uuid module in q-connection
-// generates an RFC4122, version 4, UUID
-//exports.generate = generate;
-var UUID = generate;
-function generate() {
-    return R(8) + "-" + R(4) + "-4" + R(3) + "-" + R(8) + R(4);
-}
-
-// generates up to 8 random digits in the upper-case hexadecimal alphabet
-function R(n) {
-    return (
-        Math.random().toString(16) + "00000000"
-    ).slice(2, 2 + n).toUpperCase();
-}
-
-// References:
-// http://www.ietf.org/rfc/rfc4122.txt (particularly version 4)
-// https://twitter.com/#!/kriskowal/status/157519149772447744
-// http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
-// http://note19.com/2007/05/27/javascript-guid-generator/
-// http://www.broofa.com/Tools/Math.uuid.js
-// http://www.broofa.com/blog/?p=151
-
-
-
-
-// HACK moved to async
-//var Q = require("montage/core/promise");
-//var LruMap = require("montage/collections/lru-map");
-
-function debug() {
-    //typeof console !== "undefined" && console.log.apply(console, arguments);
-}
-
-var rootId = "";
-
-var has = Object.prototype.hasOwnProperty;
-
-/**
- * @param connection
- * @param local
- */
-//HACK
-var Connection = Connection;
-function Connection(connection, local, options) {
-    options = options || {};
-    var makeId = options.makeId || function () {
-        return UUID.generate();
-    };
-    var locals = LruMap(null, options.max || Infinity);
-//    connection = adapt(connection, options.origin);
-
-    var debugKey = Math.random().toString(16).slice(2, 4).toUpperCase() + ":";
-    function _debug() {
-        debug.apply(null, [debugKey].concat(Array.prototype.slice.call(arguments)));
-    }
-
-    // Some day, the following will merely be:
-    //  connection.forEach(function (message) {
-    //      receive(message);
-    //  })
-    //  .then(function () {
-    //      var error = new Error("Connection closed");
-    //      locals.forEach(function (local) {
-    //          local.reject(error);
-    //      });
-    //  })
-    //  .done()
-
-    // message receiver loop
-    connection.get().then(get);
-    function get(message) {
-        _debug("receive:", message);
-        connection.get().then(get);
-        receive(message);
-    }
-
-    if (connection.closed) {
-        connection.closed.then(function () {
-            var error = new Error("Can't resolve promise because Connection closed");
-            locals.forEach(function (local) {
-                local.reject(error);
-            });
-        });
-    }
-
-    // message receiver
-    function receive(message) {
-        message = JSON.parse(message);
-        _debug("receive: parsed message", message);
-
-        if (!receivers[message.type])
-            return; // ignore bad message types
-        if (!locals.has(message.to))
-            return; // ignore messages to non-existant or forgotten promises
-        receivers[message.type](message);
-    }
-
-    // message receiver handlers by message type
-    var receivers = {
-        "resolve": function (message) {
-            if (locals.has(message.to)) {
-                dispatchLocal(message.to, 'resolve', decode(message.resolution));
-            }
-        },
-        "notify": function (message) {
-            if (locals.has(message.to)) {
-                dispatchLocal(message.to, 'notify', decode(message.resolution));
-            }
-        },
-        // a "send" message forwards messages from a remote
-        // promise to a local promise.
-        "send": function (message) {
-
-            // forward the message to the local promise,
-            // which will return a response promise
-            var local = locals.get(message.to).promise;
-            var response = local.dispatch(message.op, decode(message.args));
-            var envelope;
-
-            // connect the local response promise with the
-            // remote response promise:
-
-            // if the value is ever resolved, send the
-            // fulfilled value across the wire
-            response.then(function (resolution) {
-                try {
-                    resolution = encode(resolution);
-                } catch (exception) {
-                    try {
-                        resolution = {"!": encode(exception)};
-                    } catch (exception) {
-                        resolution = {"!": null};
-                    }
-                }
-                envelope = JSON.stringify({
-                    "type": "resolve",
-                    "to": message.from,
-                    "resolution": resolution
-                });
-                connection.put(envelope);
-            }, function (reason) {
-                try {
-                    reason = encode(reason);
-                } catch (exception) {
-                    try {
-                        reason = encode(exception);
-                    } catch (exception) {
-                        reason = null;
-                    }
-                }
-                envelope = JSON.stringify({
-                    "type": "resolve",
-                    "to": message.from,
-                    "resolution": {"!": reason}
-                })
-                connection.put(envelope);
-            }, function (progress) {
-                try {
-                    progress = encode(progress);
-                    envelope = JSON.stringify({
-                        "type": "notify",
-                        "to": message.from,
-                        "resolution": progress
-                    });
-                } catch (exception) {
-                    try {
-                        progress = {"!": encode(exception)};
-                    } catch (exception) {
-                        progress = {"!": null};
-                    }
-                    envelope = JSON.stringify({
-                        "type": "resolve",
-                        "to": message.from,
-                        "resolution": progress
-                    });
-                }
-                connection.put(envelope);
-            })
-            .done();
-
-        }
-    }
-
-    // construct a local promise, such that it can
-    // be resolved later by a remote message
-    function makeLocal(id) {
-        if (locals.has(id)) {
-            return locals.get(id).promise;
-        } else {
-            var deferred = Q.defer();
-            locals.set(id, deferred);
-            return deferred.promise;
-        }
-    }
-
-    // a utility for resolving the local promise
-    // for a given identifier.
-    function dispatchLocal(id, op, value) {
-        _debug(op + ':', "L" + JSON.stringify(id), JSON.stringify(value), typeof value);
-        locals.get(id)[op](value);
-    }
-
-    // makes a promise that will send all of its events to a
-    // remote object.
-    function makeRemote(id) {
-        return Q.makePromise({
-            when: function () {
-                return this;
-            }
-        }, function (op, args) {
-            var localId = makeId();
-            var response = makeLocal(localId);
-             _debug('sending:', "R" + JSON.stringify(id), JSON.stringify(op), JSON.stringify(encode(args)));
-            connection.put(JSON.stringify({
-                "type": "send",
-                "to": id,
-                "from": localId,
-                "op": op,
-                "args": encode(args)
-            }));
-            return response;
-        });
-    }
-
-    // serializes an object tree, encoding promises such
-    // that JSON.stringify on the result will produce
-    // "QSON": serialized promise objects.
-    function encode(object) {
-        if (object === undefined) {
-            return {"%": "undefined"};
-        } else if (Object(object) !== object) {
-            if (typeof object == "number") {
-                if (object === Number.POSITIVE_INFINITY) {
-                    return {"%": "+Infinity"};
-                } else if (object === Number.NEGATIVE_INFINITY) {
-                    return {"%": "-Infinity"};
-                } else if (isNaN(object)) {
-                    return {"%": "NaN"};
-                }
-            }
-            return object;
-        } else if (Q.isPromise(object) || typeof object === "function") {
-            var id = makeId();
-            makeLocal(id);
-            dispatchLocal(id, 'resolve', object);
-            return {"@": id, "type": typeof object};
-        } else if (Array.isArray(object)) {
-            return object.map(encode);
-        } else if (typeof object === "object") {
-            var result = {};
-            if (object instanceof Error) {
-                result.message = object.message;
-                result.stack = object.stack;
-            }
-            for (var key in object) {
-                if (has.call(object, key)) {
-                    var newKey = key.replace(/[@!%\\]/, function ($0) {
-                        return "\\" + $0;
-                    });
-                    result[newKey] = encode(object[key]);
-                }
-            }
-            return result;
-        } else {
-            return object;
-        }
-    }
-
-    // decodes QSON
-    function decode(object) {
-        if (Object(object) !== object) {
-            return object;
-        } else if (object['%']) {
-            if (object["%"] === "undefined") {
-                return undefined;
-            } else if (object["%"] === "+Infinity") {
-                return Number.POSITIVE_INFINITY;
-            } else if (object["%"] === "-Infinity") {
-                return Number.NEGATIVE_INFINITY;
-            } else if (object["%"] === "NaN") {
-                return Number.NaN;
-            } else {
-                return Q.reject(new TypeError("Unrecognized type: " + object["%"]));
-            }
-        } else if (object['!']) {
-            return Q.reject(object['!']);
-        } else if (object['@']) {
-            var remote = makeRemote(object["@"]);
-            if (object.type === "function") {
-                return function () {
-                    return Q.fapply(remote, Array.prototype.slice.call(arguments));
-                };
-            } else {
-                return remote;
-            }
-        } else if (Array.isArray(object)) {
-            return object.map(decode);
-        } else {
-            var newObject = {};
-            for (var key in object) {
-                if (has.call(object, key)) {
-                    var newKey = key.replace(/\\([\\!@%])/, function ($0, $1) {
-                        return $1;
-                    });
-                    newObject[newKey] = decode(object[key]);
-                }
-            }
-            return newObject;
-        }
-    }
-
-    // a peer-to-peer promise connection is symmetric: both
-    // the local and remote side have a "root" promise
-    // object. On each side, the respective remote object is
-    // returned, and the object passed as an argument to
-    // Connection is used as the local object.  The identifier of
-    // the root object is an empty-string by convention.
-    // All other identifiers are numbers.
-    makeLocal(rootId);
-    dispatchLocal(rootId, 'resolve', local);
-    return makeRemote(rootId);
-
-}
-})(Connection);
-})});
-};
+///    ConnectionController.prototype.componentTree = function (component) {
+//        debugger
+//        var rootComponent = require("montage/ui/component").__root__;
+//        function visit(node, visitor) {
+//            var newNode;
+//            if (visitor) {
+//                newNode = visitor(node);
+//            }
+//            var children = node.childComponents;
+//            if(children != null && children.length) {
+//                var i = 0;
+//                newNode.childComponents = [];
+//                children.forEach(function(childComponent) {
+//                    newNode.childComponents[i] = visit(childComponent, visitor);
+//                    i++;
+//                });
+//            }
+//            return newNode;
+//        }
+//        var tree = visit(rootComponent, function (component) {
+//                    var newComponent = {};
+//                    newComponent.displayName = component.identifier ? component.identifier : component.constructor.name;
+//                    return newComponent;
+//                });
+//        return tree;
+//    };

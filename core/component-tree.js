@@ -1,9 +1,11 @@
 /*global Window,Document,Element,Event,Components,Touch,__require,__selectedElement,__global */
 var inspected = require("../../core/chrome").inspected;
-var devtoolsController = require("./devtools-controller").devtoolsController;
+var devtoolsController = require("./devtools-controller");
 var Promise = require("montage/core/promise").Promise;
 
-function rootComponent() {
+var pageConnection = devtoolsController.pageConnection;
+
+//function rootComponent() {
 //    if (messagePort) {
 //        var deferred = Promise.defer();
 //        devtoolsController.postMessage("componentTree").then()
@@ -42,10 +44,20 @@ function rootComponent() {
 //            throw new Error(failure);
 //        }
 //    });
-    return Promise.defer().promise;
-};
 
-exports.rootComponent = rootComponent;
+
+//    return pageConnection
+//        .then(function (connection) {
+//            return pageConnection.get("rootComponent");
+//        });
+//};
+
+exports.rootComponent = function() {
+    return pageConnection
+        .then(function (pageConnection) {
+            return pageConnection.get("rootComponent");
+        });
+};
 
 var testTree = {"displayName": "RootComponent", "childComponents": [
     {"displayName": "Main", "childComponents": [
